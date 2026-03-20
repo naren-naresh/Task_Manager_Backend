@@ -1,114 +1,102 @@
 import Task from '../models/Task.js';
 import { logger } from '../utils/logger.js';
 
-// @desc    Get user tasks
-// @route   GET /api/tasks
-export const getTasks = async (req, res, next) => {
-  try {
-    // Only fetch tasks that are not soft-deleted
-    const tasks = await Task.find({ userId: req.user._id, isDeleted: false });
-    res.json({ success: true, data: tasks });
-  } catch (error) {
-    next(error);
-  }
+export const getTasks = async (req, res) => {
+  // Added a hard limit to prevent Out-Of-Memory crashes
+  const tasks = await Task.find({ userId: req.user._id, isDeleted: false }).limit(500);
+  res.json({ success: true, data: tasks });
 };
 
-// @desc    Create a new task
-// @route   POST /api/tasks
-export const createTask = async (req, res, next) => {
-  try {
-    const task = await Task.create({
-      ...req.body,
-      userId: req.user._id,
-    });
-    res.status(201).json({ success: true, data: task });
-  } catch (error) {
-    next(error);
-  }
+export const createTask = async (req, res) => {
+  // Explicitly extract safe fields
+  const { _id, title, description, status, orderIndex } = req.body;
+  const task = await Task.create({
+    _id, title, description, status, orderIndex, userId: req.user._id,
+  });
+  res.status(201).json({ success: true, data: task });
 };
 
-// @desc    Update a task
-// @route   PUT /api/tasks/:id
-export const updateTask = async (req, res, next) => {
-  try {
-    const task = await Task.findOneAndUpdate(
-      { _id: req.params.id, userId: req.user._id },
-      { ...req.body, lastModified: Date.now() },
-      { new: true, runValidators: true }
-    );
+export const updateTask = async (req, res) => {
+  const { title, description, status, orderIndex } = req.body;
+  const task = await Task.findOneAndUpdate(
+    { _id: req.params.id, userId: req.user._id },
+    { $set: { title, description, status, orderIndex, lastModified: Date.now() } },
+    { new: true, runValidators: true }
+  );
+  
+  if (!task) { res.status(404); throw new Error('Task not found'); }
+  res.json({ success: true, data: task });
+};
 
-    if (!task) {
-      res.status(404);
-      throw new Error('Task not found');
+export const deleteTask = async (req, res) => {
+  const task = await Task.findOneAndUpdate(
+    { _id: req.params.id, userId: req.user._id },
+    { $set: { isDeleted: true, lastModified: Date.now() } },
+    { new: true }
+  );
+
+  if (!task) { res.status(404); throw new Error('Task not found'); }
+  res.json({ success: true, message: 'Task removed' });
+};
+
+export const syncTasks = async (req, res) => {
+  const { tasks } = req.body;
+  const userId = req.user._id;
+  const serverNow = Date.now();
+
+  if (!tasks || !Array.isArray(tasks) || tasks.length === 0) {
+    return res.json({ success: true, data: await Task.find({ userId, isDeleted: false }).limit(500) });
+  }
+
+  const incomingIds = tasks.map(t => t._id);
+  // Bulk fetch to solve N+1 bottleneck
+  const existingTasks = await Task.find({ _id: { $in: incomingIds }, userId });
+  const existingMap = new Map(existingTasks.map(t => [t._id, t]));
+  const bulkOps = [];
+
+  for (const clientTask of tasks) {
+    const serverTask = existingMap.get(clientTask._id);
+    const clientTime = new Date(clientTask.lastModified).getTime();
+
+    // SECURITY: Prevent "Clock Spoofing" lockout
+    if (clientTime > serverNow + 300000) {
+      logger.warn(`Clock spoofing detected for task ${clientTask._id}`);
+      continue; 
     }
-    res.json({ success: true, data: task });
-  } catch (error) {
-    next(error);
-  }
-};
 
-// @desc    Delete a task (Soft Delete for Sync)
-// @route   DELETE /api/tasks/:id
-export const deleteTask = async (req, res, next) => {
-  try {
-    // We soft delete so offline devices know this was removed during sync
-    const task = await Task.findOneAndUpdate(
-      { _id: req.params.id, userId: req.user._id },
-      { isDeleted: true, lastModified: Date.now() },
-      { new: true }
-    );
+    const safeData = {
+      title: clientTask.title,
+      description: clientTask.description,
+      status: clientTask.status,
+      orderIndex: clientTask.orderIndex,
+      lastModified: clientTask.lastModified,
+      isDeleted: clientTask.isDeleted || false,
+    };
 
-    if (!task) {
-      res.status(404);
-      throw new Error('Task not found');
-    }
-    res.json({ success: true, message: 'Task removed' });
-  } catch (error) {
-    next(error);
-  }
-};
-
-// @desc    Bulk sync offline changes
-// @route   POST /api/tasks/sync
-export const syncTasks = async (req, res, next) => {
-  const { tasks } = req.body; // Array of tasks from client's sync_queue
-
-  try {
-    const syncResults = [];
-
-    for (const clientTask of tasks) {
-      const serverTask = await Task.findOne({ _id: clientTask._id, userId: req.user._id });
-
-      if (!serverTask) {
-        // Task doesn't exist on server, create it
-        const newTask = await Task.create({ ...clientTask, userId: req.user._id });
-        syncResults.push(newTask);
-      } else {
-        // Conflict Resolution: Last-Write-Wins (LWW)
-        const clientTime = new Date(clientTask.lastModified).getTime();
-        const serverTime = new Date(serverTask.lastModified).getTime();
-
-        if (clientTime > serverTime) {
-          // Client has newer data, update server
-          const updatedTask = await Task.findByIdAndUpdate(
-            clientTask._id,
-            { ...clientTask },
-            { new: true }
-          );
-          syncResults.push(updatedTask);
-        } else {
-          // Server has newer data, keep server version
-          syncResults.push(serverTask);
+    if (!serverTask) {
+      // Upsert new task (Prevents E11000 Duplicate Key crashes)
+      bulkOps.push({
+        updateOne: {
+          filter: { _id: clientTask._id, userId },
+          update: { $setOnInsert: safeData },
+          upsert: true,
         }
+      });
+    } else {
+      // Last-Write-Wins (LWW)
+      const serverTime = new Date(serverTask.lastModified).getTime();
+      if (clientTime > serverTime) {
+        bulkOps.push({
+          updateOne: { filter: { _id: clientTask._id, userId }, update: { $set: safeData } }
+        });
       }
     }
-
-    logger.info(`Synced ${syncResults.length} tasks for user ${req.user.email}`);
-    
-    // Return the absolute latest state of all tasks to the client
-    const allTasks = await Task.find({ userId: req.user._id, isDeleted: false });
-    res.json({ success: true, data: allTasks });
-  } catch (error) {
-    next(error);
   }
+
+  if (bulkOps.length > 0) {
+    await Task.bulkWrite(bulkOps, { ordered: false }).catch(e => logger.error(`BulkWrite errors: ${e.message}`));
+  }
+
+  const allTasks = await Task.find({ userId, isDeleted: false }).limit(500);
+  res.json({ success: true, data: allTasks });
 };

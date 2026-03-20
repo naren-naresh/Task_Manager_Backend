@@ -8,18 +8,18 @@ export const protect = async (req, res, next) => {
     try {
       token = req.headers.authorization.split(' ')[1];
       const decoded = jwt.verify(token, process.env.JWT_SECRET, {
-                        issuer: 'task-manager-api',
-                        audience: 'task-manager-client',
-                      });
+        issuer: 'task-manager-api',
+        audience: 'task-manager-client',
+      });
       
       req.user = await User.findById(decoded.id).select('-password');
       return next();
     } catch (error) {
       res.status(401);
-      return next(new Error('Not authorized, token failed'));
+      throw new Error('Not authorized, token failed');
     }
   }
 
   res.status(401);
-  next(new Error('Not authorized, no token'));
+  throw new Error('Not authorized, no token');
 };

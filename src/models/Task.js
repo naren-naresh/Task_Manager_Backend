@@ -20,5 +20,7 @@ const taskSchema = new mongoose.Schema({
   isDeleted: { type: Boolean, default: false }, // Soft delete for sync
 }, { timestamps: true, _id: false }); // Disable auto-gen _id to use client UUID
 
+taskSchema.index({ userId: 1, isDeleted: 1 });
+
 const Task = mongoose.model('Task', taskSchema);
 export default Task;
