@@ -25,12 +25,11 @@ export const registerUser = async (req, res) => {
 };
 
 const cookieOptions = {
-  httpOnly: true, // Prevents JS access
-  secure: process.env.NODE_ENV === 'production', 
-  sameSite: 'strict',
+  httpOnly: true, // Remains true for security
+  secure: true,   // MUST be true for sameSite: 'none' to work
+  sameSite: 'none', // Required for cross-site (Vercel frontend to Vercel backend)
   path: '/',
 };
-
 export const loginUser = async (req, res) => {
   const { email, password } = req.body;
   const user = await User.findOne({ email });

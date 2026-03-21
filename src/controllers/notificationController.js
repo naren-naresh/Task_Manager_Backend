@@ -15,14 +15,12 @@ webpush.setVapidDetails(
 // @route   POST /api/notifications/subscribe
 export const subscribeUser = async (req, res, next) => {
   const subscription = req.body;
-
   try {
-    // Add the subscription to the user's array if it doesn't already exist
+    // Uses $addToSet to prevent duplicate endpoints if a user refreshes
     await User.findByIdAndUpdate(req.user._id, {
       $addToSet: { pushSubscriptions: subscription }
     });
-
-    res.status(201).json({ success: true, message: 'Subscribed to notifications' });
+    res.status(201).json({ success: true, message: 'Subscribed successfully' });
   } catch (error) {
     next(error);
   }
