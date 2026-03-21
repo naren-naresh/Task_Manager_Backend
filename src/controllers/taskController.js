@@ -1,5 +1,6 @@
 import Task from '../models/Task.js';
 import { logger } from '../utils/logger.js';
+import { sendPushNotification } from './notificationController.js';
 
 export const getTasks = async (req, res) => {
   // Added a hard limit to prevent Out-Of-Memory crashes
@@ -12,6 +13,10 @@ export const createTask = async (req, res) => {
   const { _id, title, description, status, orderIndex } = req.body;
   const task = await Task.create({
     _id, title, description, status, orderIndex, userId: req.user._id,
+  });
+  await sendPushNotification(req.user._id, {
+    title: 'New Task Created',
+    body: `Task "${title}" was added`,
   });
   res.status(201).json({ success: true, data: task });
 };
@@ -33,6 +38,12 @@ export const updateTask = async (req, res) => {
     res.status(404); 
     throw new Error('Task not found'); 
   }
+
+  await sendPushNotification(req.user._id, {
+    title: 'Task Updated',
+    body: `Task "${title}" was updated`,
+  });
+
   res.json({ success: true, data: task });
 };
 
@@ -44,6 +55,10 @@ export const deleteTask = async (req, res) => {
   );
 
   if (!task) { res.status(404); throw new Error('Task not found'); }
+  await sendPushNotification(req.user._id, {
+    title: 'Task Deleted',
+    body: 'A task was removed',
+  });
   res.json({ success: true, message: 'Task removed' });
 };
 
