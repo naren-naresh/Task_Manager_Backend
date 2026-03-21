@@ -62,12 +62,17 @@ export const refreshAccessToken = async (req, res) => {
   try {
     const decoded = jwt.verify(refreshToken, process.env.JWT_SECRET);
     
-    // Optional: Verify ISSUER and AUDIENCE for production grade
-    // if (decoded.iss !== 'task-manager-api') throw new Error('Invalid Issuer');
+    // SECURITY FIX 1: Verify the user still exists in the DB (prevents ghost sessions)
+    const user = await User.findById(decoded.id).select('_id');
+    if (!user) {
+      throw new Error('User no longer exists');
+    }
 
-    const newAccessToken = generateAccessToken(decoded.id);
+    // SECURITY FIX 2: Refresh Token Rotation (Issue a new pair)
+    const newAccessToken = generateAccessToken(user._id);
+    const newRefreshToken = generateRefreshToken(user._id);
 
-    // Set the new Access Token in a secure cookie (15 min)
+    // Set the new Access Token (15 min)
     res.cookie('accessToken', newAccessToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
@@ -76,9 +81,21 @@ export const refreshAccessToken = async (req, res) => {
       path: '/',
     });
 
+    // Set the NEW Refresh Token (1 day), replacing the old one
+    res.cookie('refreshToken', newRefreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 24 * 60 * 60 * 1000,
+      path: '/',
+    });
+
     res.json({ success: true });
   } catch (error) {
-    res.status(403).json({ message: 'Invalid or expired refresh token' });
+    // SECURITY FIX 3: Actively destroy the cookies if the token is invalid/expired
+    res.cookie('accessToken', '', { maxAge: 0, httpOnly: true, path: '/' });
+    res.cookie('refreshToken', '', { maxAge: 0, httpOnly: true, path: '/' });
+    res.status(403).json({ message: 'Invalid or expired session. Please log in again.' });
   }
 };
 

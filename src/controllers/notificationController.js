@@ -31,16 +31,16 @@ export const subscribeUser = async (req, res, next) => {
 // Utility function to be used by internal services (e.g., cron jobs for due dates)
 export const sendPushNotification = async (userId, payload) => {
   try {
-    const user = await User.findById(userId);
+    const user = await User.findById(userId).lean(); // .lean() for performance, we only need the data
     if (!user || user.pushSubscriptions.length === 0) return;
+
+    const expiredEndpoints = [];
 
     const notifications = user.pushSubscriptions.map(sub => 
       webpush.sendNotification(sub, JSON.stringify(payload)).catch(err => {
         if (err.statusCode === 404 || err.statusCode === 410) {
-          // Subscription has expired or is no longer valid, remove it
-          logger.warn(`Subscription expired for user ${userId}, removing...`);
-          user.pushSubscriptions = user.pushSubscriptions.filter(s => s.endpoint !== sub.endpoint);
-          user.save();
+          // Collect expired endpoints instead of saving immediately
+          expiredEndpoints.push(sub.endpoint);
         } else {
           logger.error(`Push error: ${err.message}`);
         }
@@ -48,6 +48,15 @@ export const sendPushNotification = async (userId, payload) => {
     );
 
     await Promise.all(notifications);
+
+    // ATOMIC FIX: Remove all expired subscriptions in ONE single database call
+    if (expiredEndpoints.length > 0) {
+      logger.warn(`Cleaning up ${expiredEndpoints.length} expired subscriptions for user ${userId}`);
+      await User.updateOne(
+        { _id: userId },
+        { $pull: { pushSubscriptions: { endpoint: { $in: expiredEndpoints } } } }
+      );
+    }
   } catch (error) {
     logger.error(`Failed to send push notification: ${error.message}`);
   }

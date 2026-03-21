@@ -63,63 +63,49 @@ export const deleteTask = async (req, res) => {
 };
 
 export const syncTasks = async (req, res) => {
-  const { tasks } = req.body;
+  const { tasks } = req.body; // Array of tasks from IndexedDB
   const userId = req.user._id;
-  const serverNow = Date.now();
 
-  if (!tasks || !Array.isArray(tasks) || tasks.length === 0) {
-    return res.json({ success: true, data: await Task.find({ userId, isDeleted: false }).limit(500) });
-  }
+  try {
+    const syncedTasks = [];
 
-  const incomingIds = tasks.map(t => t._id);
-  // Bulk fetch to solve N+1 bottleneck
-  const existingTasks = await Task.find({ _id: { $in: incomingIds }, userId });
-  const existingMap = new Map(existingTasks.map(t => [t._id, t]));
-  const bulkOps = [];
+    for (const clientTask of tasks) {
+      const serverTask = await Task.findOne({ _id: clientTask._id, user: userId });
 
-  for (const clientTask of tasks) {
-    const serverTask = existingMap.get(clientTask._id);
-    const clientTime = new Date(clientTask.lastModified).getTime();
+      if (!serverTask) {
+        // 1. Task doesn't exist on server -> Create it
+        const newTask = await Task.create({ ...clientTask, user: userId });
+        syncedTasks.push(newTask);
+      } else {
+        // 2. CONFLICT RESOLUTION: Last-Write-Wins (LWW)
+        // We convert both to Date objects for a safe comparison
+        const clientDate = new Date(clientTask.lastModified).getTime();
+        const serverDate = new Date(serverTask.updatedAt).getTime();
 
-    // SECURITY: Prevent "Clock Spoofing" lockout
-    if (clientTime > serverNow + 300000) {
-      logger.warn(`Clock spoofing detected for task ${clientTask._id}`);
-      continue; 
-    }
-
-    const safeData = {
-      title: clientTask.title,
-      description: clientTask.description,
-      status: clientTask.status,
-      orderIndex: clientTask.orderIndex,
-      lastModified: clientTask.lastModified,
-      isDeleted: clientTask.isDeleted || false,
-    };
-
-    if (!serverTask) {
-      // Upsert new task (Prevents E11000 Duplicate Key crashes)
-      bulkOps.push({
-        updateOne: {
-          filter: { _id: clientTask._id, userId },
-          update: { $setOnInsert: safeData },
-          upsert: true,
+        // Only update if the client's change is actually newer than the server's last known state
+        if (clientDate > serverDate) {
+          const updated = await Task.findByIdAndUpdate(
+            serverTask._id,
+            { ...clientTask, updatedAt: new Date() }, // Server sets the NEW truth
+            { new: true }
+          );
+          syncedTasks.push(updated);
+        } else {
+          // Server version is newer or same -> Send server version back to client to overwrite IDB
+          syncedTasks.push(serverTask);
         }
-      });
-    } else {
-      // Last-Write-Wins (LWW)
-      const serverTime = new Date(serverTask.lastModified).getTime();
-      if (clientTime > serverTime) {
-        bulkOps.push({
-          updateOne: { filter: { _id: clientTask._id, userId }, update: { $set: safeData } }
-        });
       }
     }
-  }
 
-  if (bulkOps.length > 0) {
-    await Task.bulkWrite(bulkOps, { ordered: false }).catch(e => logger.error(`BulkWrite errors: ${e.message}`));
+    // 3. Final Step: Fetch any tasks on the server that the client doesn't have at all
+    // (e.g., tasks created on a different device)
+    const allServerTasks = await Task.find({ user: userId, isDeleted: false });
+    
+    res.status(200).json({
+      success: true,
+      data: allServerTasks // Return the full reconciled list
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Sync failed', error: error.message });
   }
-
-  const allTasks = await Task.find({ userId, isDeleted: false }).limit(500);
-  res.json({ success: true, data: allTasks });
 };
