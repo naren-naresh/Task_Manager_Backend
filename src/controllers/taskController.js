@@ -18,13 +18,21 @@ export const createTask = async (req, res) => {
 
 export const updateTask = async (req, res) => {
   const { title, description, status, orderIndex } = req.body;
+  
   const task = await Task.findOneAndUpdate(
+    // Filter by the task's string ID and the owner's ID
     { _id: req.params.id, userId: req.user._id },
     { $set: { title, description, status, orderIndex, lastModified: Date.now() } },
-    { new: true, runValidators: true }
+    { 
+      returnDocument: 'after', 
+      runValidators: true 
+    }
   );
   
-  if (!task) { res.status(404); throw new Error('Task not found'); }
+  if (!task) { 
+    res.status(404); 
+    throw new Error('Task not found'); 
+  }
   res.json({ success: true, data: task });
 };
 
