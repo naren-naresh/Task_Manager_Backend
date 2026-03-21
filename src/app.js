@@ -13,7 +13,7 @@ import notificationRoutes from './routes/notificationRoutes.js';
 const app = express();
 
 const corsOptions = {
-  origin: 'http://localhost:3000', 
+  origin: ['http://localhost:3000',"https://task-manager-front-end-lilac.vercel.app"], 
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
