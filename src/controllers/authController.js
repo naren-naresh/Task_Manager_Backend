@@ -117,17 +117,16 @@ export const getMe = async (req, res) => {
 };
 
 export const logoutUser = (req, res) => {
-  res.cookie('accessToken', '', {
+  const logoutOptions = {
     httpOnly: true,
-    expires: new Date(0),
+    secure: true,
+    sameSite: 'none',
     path: '/',
-  });
+    expires: new Date(0), // Forces immediate expiration
+  };
 
-  res.cookie('refreshToken', '', {
-    httpOnly: true,
-    expires: new Date(0),
-    path: '/',
-  });
+  res.cookie('accessToken', '', logoutOptions);
+  res.cookie('refreshToken', '', logoutOptions); // Clear both if applicable
 
-  res.status(200).json({ success: true, message: 'Logged out' });
+  res.status(200).json({ success: true, message: 'Logged out successfully' });
 };
