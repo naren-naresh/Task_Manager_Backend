@@ -7,6 +7,7 @@ import cookieParser from 'cookie-parser';
 import { errorHandler, notFound } from './middlewares/errorMiddleware.js';
 import authRoutes from './routes/authRoutes.js';
 import taskRoutes from './routes/taskRoutes.js';
+import notificationRoutes from './routes/notificationRoutes.js';
 
 
 const app = express();
@@ -41,6 +42,8 @@ app.get('/', (req, res) => {
 // API Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/tasks', taskRoutes);
+app.use('/api/notifications', notificationRoutes);
+
 
 // Error Handling Middlewares
 app.use(notFound);

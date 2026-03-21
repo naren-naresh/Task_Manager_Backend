@@ -99,3 +99,19 @@ export const getMe = async (req, res) => {
     throw new Error('User not found');
   }
 };
+
+export const logoutUser = (req, res) => {
+  res.cookie('accessToken', '', {
+    httpOnly: true,
+    expires: new Date(0),
+    path: '/',
+  });
+
+  res.cookie('refreshToken', '', {
+    httpOnly: true,
+    expires: new Date(0),
+    path: '/',
+  });
+
+  res.status(200).json({ success: true, message: 'Logged out' });
+};
