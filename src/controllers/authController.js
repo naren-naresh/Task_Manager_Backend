@@ -3,33 +3,49 @@ import User from '../models/User.js';
 import { generateAccessToken, generateRefreshToken } from '../utils/token.js';
 import { logger } from '../utils/logger.js';
 
-export const registerUser = async (req, res) => {
-  const { email, password } = req.body;
-  const userExists = await User.findOne({ email });
-
-  if (userExists) {
-    res.status(400);
-    throw new Error('User already exists'); // Express 5 catches this automatically!
-  }
-
-  const user = await User.create({ email, password });
-
-  logger.info(`User registered: ${user.email}`);
-  res.status(201).json({
-    success: true,
-    _id: user._id,
-    email: user.email,
-    theme: user.theme,
-    token: generateAccessToken(user._id),
-  });
-};
-
 const cookieOptions = {
   httpOnly: true, // Remains true for security
   secure: true,   // MUST be true for sameSite: 'none' to work
   sameSite: 'none', // Required for cross-site (Vercel frontend to Vercel backend)
   path: '/',
 };
+
+export const registerUser = async (req, res) => {
+  const { email, password } = req.body;
+  
+  const userExists = await User.findOne({ email });
+  if (userExists) {
+    res.status(400);
+    throw new Error('User already exists');
+  }
+
+  const user = await User.create({ email, password });
+  logger.info(`User registered: ${user.email}`);
+
+  // 1. Generate BOTH tokens
+  const accessToken = generateAccessToken(user._id);
+  const refreshToken = generateRefreshToken(user._id);
+
+  // 2. Set Cookies with Production Flags (sameSite: 'none', secure: true)
+  res.cookie('accessToken', accessToken, { 
+    ...cookieOptions, 
+    maxAge: 15 * 60 * 1000 
+  });
+  
+  res.cookie('refreshToken', refreshToken, { 
+    ...cookieOptions, 
+    maxAge: 24 * 60 * 60 * 1000 
+  });
+
+  // 3. Return user data (No need to send tokens in JSON if using cookies)
+  res.status(201).json({
+    success: true,
+    _id: user._id,
+    email: user.email,
+    theme: user.theme || 'light'
+  });
+};
+
 export const loginUser = async (req, res) => {
   const { email, password } = req.body;
   const user = await User.findOne({ email });
