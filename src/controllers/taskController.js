@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import Task from '../models/Task.js';
 import { logger } from '../utils/logger.js';
 import { sendPushNotification } from './notificationController.js';
@@ -65,45 +66,54 @@ export const deleteTask = async (req, res) => {
 export const syncTasks = async (req, res) => {
   const { tasks } = req.body; 
   const userId = req.user._id;
+  console.log(userId)
 
   try {
-    const results = [];
     for (const clientTask of tasks) {
-      // FIX: Prevent 500 error by checking if ID is a valid MongoDB ObjectId
-      const isValidId = mongoose.Types.ObjectId.isValid(clientTask._id);
+      // 1. Check if the client provided a valid MongoDB ObjectId
+      const isValidObjectId = mongoose.Types.ObjectId.isValid(clientTask._id);
       
       let serverTask = null;
-      if (isValidId) {
+      if (isValidObjectId) {
         serverTask = await Task.findOne({ _id: clientTask._id, user: userId });
       }
 
       if (!serverTask) {
-        // If it's a new offline task, strip the temp ID and create fresh
+        /**
+         * FIX FOR VALIDATION ERROR:
+         * Instead of just stripping _id, we explicitly create a new 
+         * instance and then save. This ensures Mongoose generates 
+         * the _id if it's missing from the payload.
+         */
         const { _id, ...cleanData } = clientTask;
-        const newTask = await Task.create({ ...cleanData, user: userId });
-        results.push(newTask);
+        const newTask = new Task({
+          ...cleanData,
+          userId: userId,
+         _id: new mongoose.Types.ObjectId()
+        });
+        
+        await newTask.save();
       } else {
-        // Last-Write-Wins Logic
+        // 2. Last-Write-Wins Logic for existing tasks
         const clientDate = new Date(clientTask.lastModified || clientTask.updatedAt).getTime();
         const serverDate = new Date(serverTask.updatedAt).getTime();
 
         if (clientDate > serverDate) {
-          const updated = await Task.findByIdAndUpdate(
+          // Update the existing document with the newer client data
+          await Task.findByIdAndUpdate(
             serverTask._id, 
             { ...clientTask, updatedAt: new Date() }, 
-            { new: true }
+            { new: true, runValidators: false } // Disable validators for sync updates to prevent conflicts
           );
-          results.push(updated);
-        } else {
-          results.push(serverTask);
         }
       }
     }
 
+    // 3. Return the fully updated list to the client
     const finalTasks = await Task.find({ user: userId, isDeleted: false });
     res.status(200).json({ success: true, data: finalTasks });
   } catch (error) {
-    console.error("SYNC CRASH:", error); // Vital for Vercel logs
-    res.status(500).json({ success: false, message: error.message });
+    console.error("SYNC ERROR:", error); 
+    res.status(400).json({ success: false, message: error.message });
   }
 };

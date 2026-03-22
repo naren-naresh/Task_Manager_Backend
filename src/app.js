@@ -13,15 +13,30 @@ import notificationRoutes from './routes/notificationRoutes.js';
 const app = express();
 
 const corsOptions = {
-  origin: ['http://localhost:3000',"https://task-manager-front-end-lilac.vercel.app","https://task-manager-front-c6jnzvqqs-narendiran-es-projects.vercel.app",/\.vercel\.app$/], 
+  // Use a function for origin to be more flexible with Vercel subdomains
+  origin: (origin, callback) => {
+    const allowed = [
+      'http://localhost:3000',
+      'https://task-manager-front-end-lilac.vercel.app',
+      'https://task-manager-front-c6jnzvqqs-narendiran-es-projects.vercel.app'
+    ];
+    if (!origin || allowed.includes(origin) || /\.vercel\.app$/.test(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Added OPTIONS
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
 };
 
 // Security Middlewares
-app.use(helmet()); // Sets various HTTP headers for security
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" } // Required for PWA assets across domains
+}));// Sets various HTTP headers for security
 app.use(cors(corsOptions));   // Enables Cross-Origin Resource Sharing
+app.options(/.*/, cors(corsOptions));
 app.use(express.json()); // Body parser for JSON
 app.use(morgan('dev'));  // HTTP request logger
 app.use(cookieParser());
