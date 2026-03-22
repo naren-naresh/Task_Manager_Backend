@@ -67,8 +67,9 @@ export const syncTasks = async (req, res) => {
   const userId = req.user._id;
 
   try {
+    const results = [];
     for (const clientTask of tasks) {
-      // 1. Check if the ID is a valid MongoDB ObjectId
+      // FIX: Prevent 500 error by checking if ID is a valid MongoDB ObjectId
       const isValidId = mongoose.Types.ObjectId.isValid(clientTask._id);
       
       let serverTask = null;
@@ -77,33 +78,32 @@ export const syncTasks = async (req, res) => {
       }
 
       if (!serverTask) {
-        // 2. If it's a new offline task, remove the temporary ID 
-        // and let MongoDB generate a real one
-        const { _id, ...taskData } = clientTask;
-        await Task.create({ ...taskData, user: userId });
+        // If it's a new offline task, strip the temp ID and create fresh
+        const { _id, ...cleanData } = clientTask;
+        const newTask = await Task.create({ ...cleanData, user: userId });
+        results.push(newTask);
       } else {
-        // 3. Last-Write-Wins Logic
+        // Last-Write-Wins Logic
         const clientDate = new Date(clientTask.lastModified || clientTask.updatedAt).getTime();
         const serverDate = new Date(serverTask.updatedAt).getTime();
 
         if (clientDate > serverDate) {
-          await Task.findByIdAndUpdate(serverTask._id, { 
-            ...clientTask, 
-            updatedAt: new Date() 
-          });
+          const updated = await Task.findByIdAndUpdate(
+            serverTask._id, 
+            { ...clientTask, updatedAt: new Date() }, 
+            { new: true }
+          );
+          results.push(updated);
+        } else {
+          results.push(serverTask);
         }
       }
     }
 
-    const allServerTasks = await Task.find({ user: userId, isDeleted: false });
-    
-    res.status(200).json({
-      success: true,
-      data: allServerTasks
-    });
+    const finalTasks = await Task.find({ user: userId, isDeleted: false });
+    res.status(200).json({ success: true, data: finalTasks });
   } catch (error) {
-    // Log the actual error to Vercel console so you can see it
-    console.error("Sync Error Details:", error); 
-    res.status(500).json({ message: 'Sync failed', error: error.message });
+    console.error("SYNC CRASH:", error); // Vital for Vercel logs
+    res.status(500).json({ success: false, message: error.message });
   }
 };
