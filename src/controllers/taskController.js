@@ -63,49 +63,47 @@ export const deleteTask = async (req, res) => {
 };
 
 export const syncTasks = async (req, res) => {
-  const { tasks } = req.body; // Array of tasks from IndexedDB
+  const { tasks } = req.body; 
   const userId = req.user._id;
 
   try {
-    const syncedTasks = [];
-
     for (const clientTask of tasks) {
-      const serverTask = await Task.findOne({ _id: clientTask._id, user: userId });
+      // 1. Check if the ID is a valid MongoDB ObjectId
+      const isValidId = mongoose.Types.ObjectId.isValid(clientTask._id);
+      
+      let serverTask = null;
+      if (isValidId) {
+        serverTask = await Task.findOne({ _id: clientTask._id, user: userId });
+      }
 
       if (!serverTask) {
-        // 1. Task doesn't exist on server -> Create it
-        const newTask = await Task.create({ ...clientTask, user: userId });
-        syncedTasks.push(newTask);
+        // 2. If it's a new offline task, remove the temporary ID 
+        // and let MongoDB generate a real one
+        const { _id, ...taskData } = clientTask;
+        await Task.create({ ...taskData, user: userId });
       } else {
-        // 2. CONFLICT RESOLUTION: Last-Write-Wins (LWW)
-        // We convert both to Date objects for a safe comparison
-        const clientDate = new Date(clientTask.lastModified).getTime();
+        // 3. Last-Write-Wins Logic
+        const clientDate = new Date(clientTask.lastModified || clientTask.updatedAt).getTime();
         const serverDate = new Date(serverTask.updatedAt).getTime();
 
-        // Only update if the client's change is actually newer than the server's last known state
         if (clientDate > serverDate) {
-          const updated = await Task.findByIdAndUpdate(
-            serverTask._id,
-            { ...clientTask, updatedAt: new Date() }, // Server sets the NEW truth
-            { new: true }
-          );
-          syncedTasks.push(updated);
-        } else {
-          // Server version is newer or same -> Send server version back to client to overwrite IDB
-          syncedTasks.push(serverTask);
+          await Task.findByIdAndUpdate(serverTask._id, { 
+            ...clientTask, 
+            updatedAt: new Date() 
+          });
         }
       }
     }
 
-    // 3. Final Step: Fetch any tasks on the server that the client doesn't have at all
-    // (e.g., tasks created on a different device)
     const allServerTasks = await Task.find({ user: userId, isDeleted: false });
     
     res.status(200).json({
       success: true,
-      data: allServerTasks // Return the full reconciled list
+      data: allServerTasks
     });
   } catch (error) {
+    // Log the actual error to Vercel console so you can see it
+    console.error("Sync Error Details:", error); 
     res.status(500).json({ message: 'Sync failed', error: error.message });
   }
 };
