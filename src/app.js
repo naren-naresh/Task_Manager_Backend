@@ -13,7 +13,7 @@ import notificationRoutes from './routes/notificationRoutes.js';
 const app = express();
 
 const corsOptions = {
-  origin: ['http://localhost:3000',"https://task-manager-front-end-lilac.vercel.app","https://task-manager-front-c6jnzvqqs-narendiran-es-projects.vercel.app"], 
+  origin: ['http://localhost:3000',"https://task-manager-front-end-lilac.vercel.app","https://task-manager-front-c6jnzvqqs-narendiran-es-projects.vercel.app",/\.vercel\.app$/], 
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
@@ -25,6 +25,7 @@ app.use(cors(corsOptions));   // Enables Cross-Origin Resource Sharing
 app.use(express.json()); // Body parser for JSON
 app.use(morgan('dev'));  // HTTP request logger
 app.use(cookieParser());
+app.use(express.static('public'));
 
 // Rate Limiting (Bonus Feature)
 const limiter = rateLimit({
